@@ -969,6 +969,9 @@ sgl_map_user_pages(struct scatterlist *sgl, const unsigned int max_pages,
 	const unsigned long start = user_addr >> PAGE_SHIFT;
 	const int nr_pages = end - start;
 	const int read_from_card = (direction == DMA_FROM_DEVICE ? 1 : 0);
+        
+	unsigned int offset; 
+        unsigned int length;
 
 	if( sgl == NULL )
 	{
@@ -1034,18 +1037,17 @@ sgl_map_user_pages(struct scatterlist *sgl, const unsigned int max_pages,
 //	}
 
 	/* Populate the scatter/gather list */
-	sgl[0].page = pages[0];
-	sgl[0].offset = user_addr & ~PAGE_MASK;
+        offset = user_addr & ~PAGE_MASK;
+	
 	if (nr_pages > 1)
 	{
-		sgl[0].length = PAGE_SIZE - sgl[0].offset;
+                length = PAGE_SIZE - offset;
+                sg_set_page(&sgl[0], pages[0], length, offset);
 		count -= sgl[0].length;
 
 		for (i = 1; i < nr_pages; i++)
 		{
-			sgl[i].page = pages[i];
-			sgl[i].offset = 0;
-			sgl[i].length = count < PAGE_SIZE ? count : PAGE_SIZE;
+			sg_set_page(&sgl[i], pages[i], count < PAGE_SIZE ? count : PAGE_SIZE, 0);
 			count -= PAGE_SIZE;
 
 #if CSX_DEBUG
@@ -1058,7 +1060,8 @@ sgl_map_user_pages(struct scatterlist *sgl, const unsigned int max_pages,
 	}
 	else
 	{
-		sgl[0].length = count;
+                length = count;
+                sg_set_page(&sgl[0], pages[0], length, offset);
 
 #if CSX_DEBUG
 		if( (sgl[0].offset + sgl[0].length) > PAGE_SIZE )
@@ -1092,7 +1095,7 @@ sgl_unmap_user_pages(struct scatterlist *sgl, const unsigned int nr_pages,
 
 	for (i = 0; i < nr_pages; i++)
 	{
-		struct page *page = sgl[i].page;
+                struct page *page = sg_page(&sgl[i]);
 
 #if CSX_DEBUG
 		if( page == NULL )
@@ -1271,7 +1274,7 @@ csx_lock_buffer_for_dma(struct csx_device_data *cdd,
 	}
 
 	/* Clear the scatterlist */
-	memset(cdd->mem->region[chan].sglist[buffer], 0, MAX_SG_SIZE * sizeof(struct scatterlist));
+        sg_init_table(cdd->mem->region[chan].sglist[buffer], MAX_SG_SIZE);
 
 	/* Translate from private flags to DMA enum types.  */
 	if (flags & DMA_FLAG_FROM_DEVICE)
@@ -1345,12 +1348,12 @@ csx_unmap_to_iommu(struct pci_dev *pdev, struct scatterlist *sgl,
 	{
 		if (direction == DMA_FROM_DEVICE)
 		{
-			if (!PageReserved(sgl[i].page))
+			if(!PageReserved(sg_page(&sgl[i])))
 			{
-				SetPageDirty(sgl[i].page);
+				SetPageDirty(sg_page(&sgl[i]));
 			}
 		}
-		page_cache_release(sgl[i].page);
+		page_cache_release(sg_page(&sgl[i]));
 	}
 	return 0;		/* can't fail I guess. */
 }
@@ -4009,7 +4012,7 @@ csx_probe(struct pci_dev *pdev, const struct pci_device_id *pci_id)
 #endif
 
 	/* Register interrupt handler */
-	ret = request_irq(pdev->irq, csx_intr_handler, SA_SHIRQ, "csx", cdd);
+	ret = request_irq(pdev->irq, csx_intr_handler, IRQF_SHARED, "csx", cdd);
 	if (ret) {
 		errmsg = "Failed to register interrupt handler";
 		goto out_handler;
